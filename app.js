@@ -1,5 +1,8 @@
 import express from "express";
 import cors from "cors";
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const app = express();
 
@@ -20,15 +23,77 @@ app.get("/session", async (req, res) => {
   const r = await fetch("https://api.openai.com/v1/realtime/sessions", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${key}`,
-      "Content-Type": "application/json"
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
     },
     body: JSON.stringify({
       model: "gpt-4o-realtime-preview-2024-12-17",
       voice: "verse",
-      instructions: SYSTEM_PROMPT
+      instructions: SYSTEM_PROMPT,
+      modalities: ["audio", "text"],
+      input_audio_transcription: {
+        model: "whisper-1",
+      },
+      tools: [
+        {
+          type: "function",
+          name: "end_conversation",
+          description:
+            "Inchide conversatia cand clientul spune la revedere sau doreste sa opreasca conversatia",
+          parameters: {
+            type: "object",
+            properties: {
+              should_end: {
+                type: "boolean",
+                description: "daca sa inchida conversatia",
+              },
+            },
+            required: ["should_end"],
+          },
+        },
+      ],
     }),
   });
+
+//   app.post('/session', async (req, res) => {
+//     try {
+//       const response = await fetch('https://api.openai.com/v1/realtime', {
+//         method: 'POST',
+//         headers: {
+//           'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+//           'Content-Type': 'application/json',
+//           'OpenAI-Beta': 'realtime=v1'
+//         },
+//         body: JSON.stringify({
+//           model: "gpt-4o-realtime-preview-2024-12-17",
+//           output_format: "text_and_audio",
+//           tools: [{
+//             type: "function",
+//             function: {
+//               name: "end_conversation",
+//               description: "End the conversation when the user says goodbye or wants to end the conversation",
+//               parameters: {
+//                 type: "object",
+//                 properties: {
+//                   should_end: {
+//                     type: "boolean",
+//                     description: "Whether to end the conversation"
+//                   }
+//                 },
+//                 required: ["should_end"]
+//               }
+//             }
+//           }]
+//         })
+//       });
+  
+//       const data = await response.json();
+//       res.json(data);
+//     } catch (error) {
+//       console.error('Error:', error);
+//       res.status(500).json({ error: 'Failed to initialize session' });
+//     }
+//   });
   const data = await r.json();
   
 
