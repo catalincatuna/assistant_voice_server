@@ -7,11 +7,18 @@ dotenv.config();
 const app = express();
 
 app.use(cors({ origin: "http://localhost:8080" }));
+app.use(express.json());
 
 const port = 3000;
 
 const key = process.env.OPENAI_API_KEY;
 
+// Global variables to store property details
+let propertyDetails = {
+  name: "",
+  location: "",
+  description: "",
+};
 
 const SYSTEM_PROMPT1 = `
 Esti un asistent cu accent roman care deschide conversatia si intreaba 'cu ce va pot ajuta', 
@@ -31,25 +38,32 @@ Raspunsurile tale sa fie scurte si la subiect, daca trec 2 minute si clientul nu
 The Episode Jacuzzi il poti pronunta cu accent romanesc.
 `;
 
-const SYSTEM_PROMPT2 = `
+var SYSTEM_PROMPT2 = "";
+
+const updateSystemPrompt = (name, location, description) => {
+  return `
 IMPORTANT: Discutiile o sa fie in romana, daca clientul vorbeste in engleza te rugam sa raspunzi in engleza.
-IMPORTANT: Cum incepe sesiunea trebuie sa spui "Buna ziua! Sunt operatorul apartamentului Episode - Jacuzzi Penthouses. Cu ce va pot ajuta?"
+IMPORTANT: Cum incepe sesiunea trebuie sa spui "Buna ziua! Sunt operatorul apartamentului ${name}. Cu ce va pot ajuta?"
 Lucrezi ca si operator la un apartament in regim hotelier si o sa primesti apeluri de la potentiali clienti.
 
 Dupa ce incepi conversatia, raspunzi la intrebarile clientului despre proprietate.
-
-Proprietatea are urmatoarea descriere: se află în Cluj-Napoca, la 15 minute de mers pe jos de EXPO Transilvania, și oferă WiFi gratuit, o terasă și parcare privată gratuită. Proprietatea se află la 3,3 km de Muzeul Etnografic al Transilvaniei și include vedere la oraș și la piscină.
+Proprietatea se afla in ${location}
+Proprietatea are urmatoarea descriere: ${description}
 
 Trebuie sa discuti despre proprietate si nu despre altceva. Daca clientul are o rezervare va trebui sa o indentifici si sa identifici si clientul.
-
-Daca clientul cere sa faca o rezervare il vei directiona spre numaru : 0751020322
 `;
-
+};
 
 // An endpoint which would work with the client code above - it returns
 // the contents of a REST API request to this protected endpoint
 app.get("/session", async (req, res) => {
-  
+  if (!SYSTEM_PROMPT2) {
+    return res.status(400).json({
+      error:
+        "Property details not set. Please set property details using POST /property first.",
+    });
+  }
+
   const r = await fetch("https://api.openai.com/v1/realtime/sessions", {
     method: "POST",
     headers: {
@@ -105,50 +119,34 @@ app.get("/session", async (req, res) => {
     }),
   });
 
-//   app.post('/session', async (req, res) => {
-//     try {
-//       const response = await fetch('https://api.openai.com/v1/realtime', {
-//         method: 'POST',
-//         headers: {
-//           'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-//           'Content-Type': 'application/json',
-//           'OpenAI-Beta': 'realtime=v1'
-//         },
-//         body: JSON.stringify({
-//           model: "gpt-4o-realtime-preview-2024-12-17",
-//           output_format: "text_and_audio",
-//           tools: [{
-//             type: "function",
-//             function: {
-//               name: "end_conversation",
-//               description: "End the conversation when the user says goodbye or wants to end the conversation",
-//               parameters: {
-//                 type: "object",
-//                 properties: {
-//                   should_end: {
-//                     type: "boolean",
-//                     description: "Whether to end the conversation"
-//                   }
-//                 },
-//                 required: ["should_end"]
-//               }
-//             }
-//           }]
-//         })
-//       });
-  
-//       const data = await response.json();
-//       res.json(data);
-//     } catch (error) {
-//       console.error('Error:', error);
-//       res.status(500).json({ error: 'Failed to initialize session' });
-//     }
-//   });
   const data = await r.json();
-  
 
   // Send back the JSON we received from the OpenAI REST API
   res.send(data);
+});
+
+// POST endpoint to update property details
+app.post("/property", (req, res) => {
+  const { Name, Location, Description } = req.body;
+
+  if (!Name || !Location || !Description) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  propertyDetails = {
+    name: Name,
+    location: Location,
+    description: Description,
+  };
+
+  // Update SYSTEM_PROMPT2 with the new property details
+  SYSTEM_PROMPT2 = updateSystemPrompt(Name, Location, Description);
+
+  res.status(200).json({
+    message: "Property details updated successfully",
+    propertyDetails,
+    updatedPrompt: SYSTEM_PROMPT2,
+  });
 });
 
 app.listen(port, () => {
