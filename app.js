@@ -6,7 +6,7 @@ dotenv.config();
 
 const app = express();
 
-app.use(cors({ origin: "http://localhost:8080" }));
+app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 const port = 3000;
@@ -42,9 +42,10 @@ var SYSTEM_PROMPT2 = "";
 
 const updateSystemPrompt = (name, location, description) => {
   return `
-IMPORTANT: Discutiile o sa fie in romana, daca clientul vorbeste in engleza te rugam sa raspunzi in engleza.
-IMPORTANT: Cum incepe sesiunea trebuie sa spui "Buna ziua! Sunt operatorul apartamentului ${name}. Cu ce va pot ajuta?"
 Lucrezi ca si operator la un apartament in regim hotelier si o sa primesti apeluri de la potentiali clienti.
+Vorbesti intr-un ritm mai rapid si pe un ton calm.
+IMPORTANT: Incepi prin a spune "Buna ziua! Sunt operatorul apartamentului ${name}. Cu ce va pot ajuta?"
+IMPORTANT: Discutiile o sa fie in romana, daca clientul vorbeste in engleza te rugam sa raspunzi in engleza.
 
 Dupa ce incepi conversatia, raspunzi la intrebarile clientului despre proprietate.
 Proprietatea se afla in ${location}
@@ -54,13 +55,51 @@ Trebuie sa discuti despre proprietate si nu despre altceva. Daca clientul are o 
 `;
 };
 
-// An endpoint which would work with the client code above - it returns
-// the contents of a REST API request to this protected endpoint
+// Session management
+const sessions = new Map();
+
+// POST endpoint to update property details
+app.post("/property", (req, res) => {
+  const { Name, Location, Description, sessionId } = req.body;
+
+  if (!Name || !Location || !Description || !sessionId) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  const propertyDetails = {
+    name: Name,
+    location: Location,
+    description: Description,
+  };
+
+  // Update session with new property details
+  sessions.set(sessionId, {
+    propertyDetails,
+    systemPrompt: updateSystemPrompt(Name, Location, Description),
+  });
+
+  res.status(200).json({
+    message: "Property details updated successfully",
+    propertyDetails,
+    sessionId,
+  });
+});
+
+// GET endpoint for session
 app.get("/session", async (req, res) => {
-  if (!SYSTEM_PROMPT2) {
+  const { sessionId } = req.query;
+
+  if (!sessionId) {
+    return res.status(400).json({
+      error: "Session ID is required",
+    });
+  }
+
+  const session = sessions.get(sessionId);
+  if (!session) {
     return res.status(400).json({
       error:
-        "Property details not set. Please set property details using POST /property first.",
+        "Property details not set for this session. Please set property details using POST /property first.",
     });
   }
 
@@ -73,7 +112,7 @@ app.get("/session", async (req, res) => {
     body: JSON.stringify({
       model: "gpt-4o-realtime-preview-2024-12-17",
       voice: "ash",
-      instructions: SYSTEM_PROMPT2,
+      instructions: session.systemPrompt,
       modalities: ["audio", "text"],
       input_audio_transcription: {
         model: "gpt-4o-mini-transcribe",
@@ -114,39 +153,13 @@ app.get("/session", async (req, res) => {
         },
       ],
       tool_choice: "auto",
-      temperature: 0.7,
-      max_response_output_tokens: 200,
+      temperature: 0.6,
+      max_response_output_tokens: 500,
     }),
   });
 
   const data = await r.json();
-
-  // Send back the JSON we received from the OpenAI REST API
   res.send(data);
-});
-
-// POST endpoint to update property details
-app.post("/property", (req, res) => {
-  const { Name, Location, Description } = req.body;
-
-  if (!Name || !Location || !Description) {
-    return res.status(400).json({ error: "Missing required fields" });
-  }
-
-  propertyDetails = {
-    name: Name,
-    location: Location,
-    description: Description,
-  };
-
-  // Update SYSTEM_PROMPT2 with the new property details
-  SYSTEM_PROMPT2 = updateSystemPrompt(Name, Location, Description);
-
-  res.status(200).json({
-    message: "Property details updated successfully",
-    propertyDetails,
-    updatedPrompt: SYSTEM_PROMPT2,
-  });
 });
 
 app.listen(port, "0.0.0.0", () => {
