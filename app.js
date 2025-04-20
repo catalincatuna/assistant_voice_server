@@ -1,17 +1,23 @@
 import express from "express";
 import cors from "cors";
 import dotenv from 'dotenv';
+import OpenAI from "openai";
+import fs from "fs";
 
 dotenv.config();
 
 const app = express();
 
+const key = process.env.OPENAI_API_KEY;
+const openai = new OpenAI({
+  apiKey: key,
+});
+
 app.use(cors({ origin: "*" }));
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 const port = 3000;
-
-const key = process.env.OPENAI_API_KEY;
 
 // Global variables to store property details
 let propertyDetails = {
@@ -160,6 +166,73 @@ app.get("/session", async (req, res) => {
 
   const data = await r.json();
   res.send(data);
+});
+
+// Vision endpoint for image analysis
+app.post("/vision", async (req, res) => {
+  const { image, prompt } = req.body;
+
+  if (!image) {
+    return res.status(400).json({ error: "No image data provided" });
+  }
+
+  try {
+    // const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    //   method: "POST",
+    //   headers: {
+    //     Authorization: `Bearer ${key}`,
+    //     "Content-Type": "application/json",
+    //   },
+    //   body: JSON.stringify({
+    //     model: "gpt-4.1",
+    //     messages: [
+    //       {
+    //         role: "user",
+    //         content: [
+    //           {
+    //             type: "input_text",
+    //             text: prompt || "Descrie in detaliu proprietatea din imagine.",
+    //           },
+    //           {
+    //             type: "input_image",
+    //             image_url: image,
+    //           },
+    //         ],
+    //       },
+    //     ],
+    //   }),
+    // });
+
+    const openai = new OpenAI({
+      apiKey: key,
+    });
+    // const imagePath = "C:/Users/cata/Pictures/Screenshots/Jacuzzi.png";
+    // const base64Image = fs.readFileSync(imagePath, "base64");
+
+    const response = await openai.responses.create({
+      model: "gpt-4.1",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "Descrie in detaliu cum pot intra pe garajul proprietatii din imagine.",
+            },
+            {
+              type: "input_image",
+              image_url: `data:image/jpeg;base64,${image}`,
+            },
+          ],
+        },
+      ],
+    });
+    const data = response.output_text;
+    res.json(data);
+  } catch (error) {
+    console.error("Error:", error);
+    res.status(500).json({ error: "Failed with error: " + error });
+  }
 });
 
 app.listen(port, "0.0.0.0", () => {
