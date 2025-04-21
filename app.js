@@ -49,7 +49,7 @@ var SYSTEM_PROMPT2 = "";
 const updateSystemPrompt = (name, location, description) => {
   return `
 Lucrezi ca si operator la un apartament in regim hotelier si o sa primesti apeluri de la potentiali clienti.
-Vorbesti intr-un ritm mai rapid si pe un ton calm.
+Vorbesti pe un ton calm.
 IMPORTANT: Incepi prin a spune "Buna ziua! Sunt operatorul apartamentului ${name}. Cu ce va pot ajuta?"
 IMPORTANT: Discutiile o sa fie in romana, daca clientul vorbeste in engleza te rugam sa raspunzi in engleza.
 
@@ -117,11 +117,11 @@ app.get("/session", async (req, res) => {
     },
     body: JSON.stringify({
       model: "gpt-4o-realtime-preview-2024-12-17",
-      voice: "ash",
+      voice: "coral",
       instructions: session.systemPrompt,
       modalities: ["audio", "text"],
       input_audio_transcription: {
-        model: "gpt-4o-mini-transcribe",
+        model: "gpt-4o-transcribe",
         language: "ro",
       },
       tools: [
@@ -159,8 +159,7 @@ app.get("/session", async (req, res) => {
         },
       ],
       tool_choice: "auto",
-      temperature: 0.6,
-      max_response_output_tokens: 500,
+      temperature: 0.65,
     }),
   });
 
@@ -177,32 +176,6 @@ app.post("/vision", async (req, res) => {
   }
 
   try {
-    // const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    //   method: "POST",
-    //   headers: {
-    //     Authorization: `Bearer ${key}`,
-    //     "Content-Type": "application/json",
-    //   },
-    //   body: JSON.stringify({
-    //     model: "gpt-4.1",
-    //     messages: [
-    //       {
-    //         role: "user",
-    //         content: [
-    //           {
-    //             type: "input_text",
-    //             text: prompt || "Descrie in detaliu proprietatea din imagine.",
-    //           },
-    //           {
-    //             type: "input_image",
-    //             image_url: image,
-    //           },
-    //         ],
-    //       },
-    //     ],
-    //   }),
-    // });
-
     const openai = new OpenAI({
       apiKey: key,
     });
