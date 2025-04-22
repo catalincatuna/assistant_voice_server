@@ -116,7 +116,10 @@ export const handleIncomingMessage = (data) => {
   }
 };
 
-export const initializeServerRealtimeSession = async (onMessage) => {
+export const initializeServerRealtimeSession = async (
+  onMessage,
+  sessionToken
+) => {
   try {
     // Create WebSocket connection to OpenAI
     const url = "wss://api.openai.com/v1/realtime?intent=transcription";
@@ -169,7 +172,7 @@ export const initializeServerRealtimeSession = async (onMessage) => {
       method: "POST",
       body: offer.sdp,
       headers: {
-        Authorization: `Bearer ${DEFAULT_SESSION_TOKEN}`,
+        Authorization: `Bearer ${sessionToken}`,
         "Content-Type": "application/sdp",
       },
     });

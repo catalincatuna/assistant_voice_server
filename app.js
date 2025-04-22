@@ -3,6 +3,21 @@ import cors from "cors";
 import dotenv from 'dotenv';
 import OpenAI from "openai";
 import fs from "fs";
+import { WebSocket } from "ws";
+import wrtc from "wrtc";
+import crypto from "crypto";
+const { RTCPeerConnection, RTCSessionDescription } = wrtc;
+
+// Import realtime server functions
+import {
+  initializeServerRealtimeSession,
+  cleanupServerConnection,
+  handleMessage,
+  handleIncomingMessage,
+  sendOpeningMessage,
+  sendClosingMessage,
+  sendReservationData,
+} from "./serverRealtime.js";
 
 dotenv.config();
 
@@ -25,6 +40,9 @@ let propertyDetails = {
   location: "",
   description: "",
 };
+
+// Store active RTC connections
+const activeConnections = new Map();
 
 const SYSTEM_PROMPT1 = `
 Esti un asistent cu accent roman care deschide conversatia si intreaba 'cu ce va pot ajuta', 
@@ -66,9 +84,11 @@ const sessions = new Map();
 
 // POST endpoint to update property details
 app.post("/property", (req, res) => {
+  console.log("POST /property - Request received:", req.body);
   const { Name, Location, Description, sessionId } = req.body;
 
   if (!Name || !Location || !Description || !sessionId) {
+    console.log("POST /property - Missing required fields");
     return res.status(400).json({ error: "Missing required fields" });
   }
 
@@ -84,6 +104,10 @@ app.post("/property", (req, res) => {
     systemPrompt: updateSystemPrompt(Name, Location, Description),
   });
 
+  console.log(
+    "POST /property - Successfully updated property details for session:",
+    sessionId
+  );
   res.status(200).json({
     message: "Property details updated successfully",
     propertyDetails,
@@ -91,24 +115,25 @@ app.post("/property", (req, res) => {
   });
 });
 
-// GET endpoint for session
-app.get("/session", async (req, res) => {
-  const { sessionId } = req.query;
+// Function to generate random session ID
+const generateSessionId = () => {
+  return crypto.randomUUID();
+};
 
-  if (!sessionId) {
-    return res.status(400).json({
-      error: "Session ID is required",
-    });
+// Function to handle session logic
+const handleSessionRequest = async (sessionId) => {
+  if (!sessionId || typeof sessionId !== "string") {
+    throw new Error("Session ID is required");
   }
 
   const session = sessions.get(sessionId);
   if (!session) {
-    return res.status(400).json({
-      error:
-        "Property details not set for this session. Please set property details using POST /property first.",
-    });
+    throw new Error(
+      "Property details not set for this session. Please set property details using POST /property first."
+    );
   }
 
+  console.log("Creating session with OpenAI for sessionId:", sessionId);
   const r = await fetch("https://api.openai.com/v1/realtime/sessions", {
     method: "POST",
     headers: {
@@ -149,7 +174,7 @@ app.get("/session", async (req, res) => {
           parameters: {
             type: "object",
             properties: {
-              should_end: {
+              name: {
                 type: "string",
                 description: "numele clientului",
               },
@@ -164,47 +189,189 @@ app.get("/session", async (req, res) => {
   });
 
   const data = await r.json();
-  res.send(data);
+  console.log("Received session data from OpenAI:", data);
+
+  // Create a new session object with the token
+  const updatedSession = {
+    ...session,
+    sessionToken: data.client_secret.value,
+  };
+
+  // Update the session in the map
+  sessions.set(sessionId, updatedSession);
+  console.log("Updated session with token:", sessionId);
+
+  return data;
+};
+
+// Function to handle vision analysis
+const handleVisionRequest = async (image, prompt) => {
+  if (!image) {
+    throw new Error("No image data provided");
+  }
+
+  const response = await openai.responses.create({
+    model: "gpt-4.1",
+    input: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: "Descrie in detaliu cum pot intra pe garajul proprietatii din imagine.",
+          },
+          {
+            type: "input_image",
+            image_url: `data:image/jpeg;base64,${image}`,
+          },
+        ],
+      },
+    ],
+  });
+  return response.output_text;
+};
+
+// GET endpoint for session
+app.get("/session", async (req, res) => {
+  console.log("GET /session - Request received with query:", req.query);
+  try {
+    const { sessionId } = req.query;
+    const data = await handleSessionRequest(sessionId);
+    console.log("GET /session - Successfully created session:", sessionId);
+    res.send(data);
+  } catch (error) {
+    console.error("GET /session - Error:", error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Vision endpoint for image analysis
 app.post("/vision", async (req, res) => {
-  const { image, prompt } = req.body;
-
-  if (!image) {
-    return res.status(400).json({ error: "No image data provided" });
-  }
-
+  console.log("POST /vision - Request received");
   try {
-    const openai = new OpenAI({
-      apiKey: key,
-    });
-    // const imagePath = "C:/Users/cata/Pictures/Screenshots/Jacuzzi.png";
-    // const base64Image = fs.readFileSync(imagePath, "base64");
-
-    const response = await openai.responses.create({
-      model: "gpt-4.1",
-      input: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: "Descrie in detaliu cum pot intra pe garajul proprietatii din imagine.",
-            },
-            {
-              type: "input_image",
-              image_url: `data:image/jpeg;base64,${image}`,
-            },
-          ],
-        },
-      ],
-    });
-    const data = response.output_text;
+    const { image, prompt } = req.body;
+    // const data = await handleVisionRequest(image, prompt);
+    const data = "acesta este un garaj gri";
+    console.log("POST /vision - Successfully analyzed image");
     res.json(data);
   } catch (error) {
-    console.error("Error:", error);
-    res.status(500).json({ error: "Failed with error: " + error });
+    console.error("POST /vision - Error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Endpoint to handle client's offer
+app.post("/start-stream", async (req, res) => {
+  console.log("POST /start-stream - Request received");
+  const { sdp, type, sessionId } = req.body;
+
+  const pc = new RTCPeerConnection();
+
+  try {
+    const data = await handleSessionRequest(sessionId);
+
+    // Get the session and its token
+    const session = sessions.get(sessionId);
+    console.log("POST /start-stream - Sessions:", sessions);
+    console.log("POST /start-stream - Session:", session);
+    console.log("POST /start-stream - Session token:", session.sessionToken);
+    if (!session || !session.sessionToken) {
+      throw new Error(
+        "No valid session token found. Please create a session first."
+      );
+    }
+
+    // Initialize OpenAI RTC connection with the session token
+    const {
+      pc: openaiPC,
+      dc: openaiDC,
+      ws: openaiWS,
+    } = await initializeServerRealtimeSession(
+      handleMessage,
+      session.sessionToken
+    );
+    console.log("POST /start-stream - Initialized OpenAI RTC connection");
+    const openaiConnection = { pc: openaiPC, dc: openaiDC, ws: openaiWS };
+
+    pc.ontrack = (event) => {
+      console.log(
+        "POST /start-stream - Received remote track:",
+        event.track.kind
+      );
+      if (event.track.kind === "audio") {
+        // Add the received audio track to OpenAI's connection
+        openaiPC.addTrack(event.track);
+        console.log(
+          "POST /start-stream - Added audio track to OpenAI connection"
+        );
+      }
+    };
+
+    // Send opening message when connection is established
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === "connected") {
+        console.log(
+          "POST /start-stream - Client connection established, sending opening message"
+        );
+        sendOpeningMessage(openaiDC);
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      if (
+        pc.iceConnectionState === "disconnected" ||
+        pc.iceConnectionState === "failed"
+      ) {
+        console.log(
+          "POST /start-stream - Client connection closed, sending closing message"
+        );
+        sendClosingMessage(openaiDC);
+        pc.close();
+        cleanupServerConnection(openaiConnection);
+      }
+    };
+
+    await pc.setRemoteDescription({ type, sdp });
+
+    // Respond with an answer
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    console.log("POST /start-stream - Created and set local answer");
+
+    // Wait for ICE gathering to complete
+    await new Promise((resolve) => {
+      if (pc.iceGatheringState === "complete") {
+        resolve();
+      } else {
+        const checkState = () => {
+          if (pc.iceGatheringState === "complete") {
+            pc.removeEventListener("icegatheringstatechange", checkState);
+            resolve();
+          }
+        };
+        pc.addEventListener("icegatheringstatechange", checkState);
+      }
+    });
+    console.log("POST /start-stream - ICE gathering completed");
+
+    // Store the connections
+    activeConnections.set(sessionId, {
+      clientPC: pc,
+      openaiConnection,
+    });
+    console.log(
+      "POST /start-stream - Stored connections for session:",
+      sessionId
+    );
+
+    res.json({
+      answer: pc.localDescription,
+      sessionId,
+    });
+    console.log("POST /start-stream - Successfully responded to client");
+  } catch (error) {
+    console.error("POST /start-stream - Error:", error);
+    res.status(500).json({ error: error.message });
   }
 });
 
