@@ -6,7 +6,10 @@ import fs from "fs";
 import { WebSocket } from "ws";
 import wrtc from "wrtc";
 import crypto from "crypto";
-const { RTCPeerConnection, RTCSessionDescription } = wrtc;
+import Speaker from "speaker";
+import wav from "node-wav";
+import path from "path";
+const { RTCPeerConnection, RTCSessionDescription, MediaStream } = wrtc;
 
 // Import realtime server functions
 import {
@@ -260,6 +263,9 @@ app.post("/vision", async (req, res) => {
   }
 });
 
+// At the top of the file, after other imports
+const speakers = new Map(); // Store speakers for each connection
+
 // Endpoint to handle client's offer
 app.post("/start-stream", async (req, res) => {
   console.log("POST /start-stream - Request received");
@@ -268,52 +274,82 @@ app.post("/start-stream", async (req, res) => {
   const pc = new RTCPeerConnection();
 
   try {
-    const data = await handleSessionRequest(sessionId);
-
     // Get the session and its token
     const session = sessions.get(sessionId);
-    console.log("POST /start-stream - Sessions:", sessions);
-    console.log("POST /start-stream - Session:", session);
-    console.log("POST /start-stream - Session token:", session.sessionToken);
     if (!session || !session.sessionToken) {
       throw new Error(
         "No valid session token found. Please create a session first."
       );
     }
 
-    // Initialize OpenAI RTC connection with the session token
-    const {
-      pc: openaiPC,
-      dc: openaiDC,
-      ws: openaiWS,
-    } = await initializeServerRealtimeSession(
-      handleMessage,
-      session.sessionToken
-    );
-    console.log("POST /start-stream - Initialized OpenAI RTC connection");
-    const openaiConnection = { pc: openaiPC, dc: openaiDC, ws: openaiWS };
-
+    // Set up audio track handling
     pc.ontrack = (event) => {
       console.log(
         "POST /start-stream - Received remote track:",
         event.track.kind
       );
       if (event.track.kind === "audio") {
-        // Add the received audio track to OpenAI's connection
-        openaiPC.addTrack(event.track);
-        console.log(
-          "POST /start-stream - Added audio track to OpenAI connection"
-        );
+        try {
+          // Create a new speaker instance
+          const speaker = new Speaker({
+            channels: 1, // 1 channel
+            bitDepth: 16, // 16-bit samples
+            sampleRate: 48000, // 48,000 Hz sample rate
+          });
+
+          // Store the speaker instance
+          speakers.set(sessionId, speaker);
+
+          // Get the audio stream
+          const stream = event.streams[0];
+
+          // Create a MediaStreamTrackProcessor to get raw audio data
+          const processor = new MediaStreamTrackProcessor({
+            track: event.track,
+          });
+          const reader = processor.readable.getReader();
+
+          // Process audio data
+          const processAudio = async () => {
+            try {
+              while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+
+                // Write audio data to speaker
+                if (value) {
+                  const audioData = value.data;
+                  speaker.write(Buffer.from(audioData.buffer));
+                }
+              }
+            } catch (error) {
+              console.error("Error processing audio:", error);
+            }
+          };
+
+          processAudio();
+          console.log("POST /start-stream - Set up audio playback");
+        } catch (error) {
+          console.error("Error setting up audio playback:", error);
+        }
       }
     };
 
     // Send opening message when connection is established
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === "connected") {
-        console.log(
-          "POST /start-stream - Client connection established, sending opening message"
-        );
-        sendOpeningMessage(openaiDC);
+        console.log("POST /start-stream - Client connection established");
+      } else if (
+        pc.connectionState === "disconnected" ||
+        pc.connectionState === "failed"
+      ) {
+        // Clean up speaker when connection ends
+        const speaker = speakers.get(sessionId);
+        if (speaker) {
+          speaker.end();
+          speakers.delete(sessionId);
+          console.log("POST /start-stream - Cleaned up speaker");
+        }
       }
     };
 
@@ -322,12 +358,16 @@ app.post("/start-stream", async (req, res) => {
         pc.iceConnectionState === "disconnected" ||
         pc.iceConnectionState === "failed"
       ) {
-        console.log(
-          "POST /start-stream - Client connection closed, sending closing message"
-        );
-        sendClosingMessage(openaiDC);
+        console.log("POST /start-stream - Client connection closed");
         pc.close();
-        cleanupServerConnection(openaiConnection);
+
+        // Clean up speaker
+        const speaker = speakers.get(sessionId);
+        if (speaker) {
+          speaker.end();
+          speakers.delete(sessionId);
+          console.log("POST /start-stream - Cleaned up speaker");
+        }
       }
     };
 
@@ -357,7 +397,6 @@ app.post("/start-stream", async (req, res) => {
     // Store the connections
     activeConnections.set(sessionId, {
       clientPC: pc,
-      openaiConnection,
     });
     console.log(
       "POST /start-stream - Stored connections for session:",
@@ -380,67 +419,39 @@ app.post("/start-local-stream", async (req, res) => {
   console.log("POST /start-local-stream - Request received");
   const { sdp, type } = req.body;
 
-  const pc = new RTCPeerConnection({
-    iceServers: [
-      {
-        urls: "stun:stun.l.google.com:19302",
-      },
-    ],
-  });
+  const pc = new RTCPeerConnection();
 
   try {
-    // Create data channel for local communication
-    const dc = pc.createDataChannel("local-communication", {
-      ordered: true,
-    });
+    // Listen for data channel from client
+    pc.ondatachannel = (event) => {
+      const dc = event.channel;
+      console.log("Received data channel from client:", dc.label);
 
-    // Set up data channel event handlers
-    dc.onopen = () => {
-      console.log("POST /start-local-stream - Data channel opened");
+      dc.onopen = () => {
+        console.log("Data channel opened");
+        // Send a test message
+        dc.send("Hello from server!");
+      };
+
+      dc.onmessage = (event) => {
+        console.log("Received message from client:", event.data);
+      };
+
+      dc.onclose = () => {
+        console.log("Data channel closed");
+      };
+
+      dc.onerror = (error) => {
+        console.error("Data channel error:", error);
+      };
     };
 
-    dc.onmessage = (event) => {
-      console.log("POST /start-local-stream - Received message:", event.data);
-      // Handle incoming messages from client
-      try {
-        const data = JSON.parse(event.data);
-        console.log("POST /start-local-stream - Parsed message:", data);
-      } catch (error) {
-        console.error("POST /start-local-stream - Error parsing message:", error);
-      }
-    };
-
-    // Set up connection state handlers
-    pc.onconnectionstatechange = () => {
-      console.log("POST /start-local-stream - Connection state:", pc.connectionState);
-      if (pc.connectionState === 'connected') {
-        console.log("POST /start-local-stream - Connection established");
-      }
-    };
-
-    pc.oniceconnectionstatechange = () => {
-      console.log("POST /start-local-stream - ICE connection state:", pc.iceConnectionState);
-      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
-        console.log("POST /start-local-stream - Connection closed");
-        pc.close();
-      }
-    };
-
-    // Handle ICE candidates
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        console.log("POST /start-local-stream - New ICE candidate");
-      }
-    };
-
-    // Set remote description from client's offer
+    // Set remote description
     await pc.setRemoteDescription(new RTCSessionDescription({ type, sdp }));
-    console.log("POST /start-local-stream - Set remote description");
 
-    // Create and send answer
+    // Create and set local answer
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    console.log("POST /start-local-stream - Created and set local answer");
 
     // Wait for ICE gathering to complete
     await new Promise((resolve) => {
@@ -456,24 +467,18 @@ app.post("/start-local-stream", async (req, res) => {
         pc.addEventListener("icegatheringstatechange", checkState);
       }
     });
-    console.log("POST /start-local-stream - ICE gathering completed");
 
     // Store the connection
     const connectionId = crypto.randomUUID();
     activeConnections.set(connectionId, {
       pc,
-      dc
     });
-    console.log("POST /start-local-stream - Stored connection with ID:", connectionId);
 
     res.json({
       answer: pc.localDescription,
-      // connectionId
     });
-    console.log("response:", res);
-
   } catch (error) {
-    console.error("POST /start-local-stream - Error:", error);
+    console.error("Error:", error);
     res.status(500).json({ error: error.message });
   }
 });

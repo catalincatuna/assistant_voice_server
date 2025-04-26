@@ -16,7 +16,10 @@
     "express": "^5.1.0",
     "fs": "^0.0.1-security",
     "node-pre-gyp": "^0.17.0",
+    "node-wav": "^0.0.2",
     "openai": "^4.28.0",
+    "speaker": "^0.5.5",
+    "web-audio-api": "^0.2.2",
     "wrtc": "^0.4.7",
     "ws": "^8.18.0"
   },
