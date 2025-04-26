@@ -375,6 +375,109 @@ app.post("/start-stream", async (req, res) => {
   }
 });
 
+// Endpoint to handle local WebRTC streaming (server to client)
+app.post("/start-local-stream", async (req, res) => {
+  console.log("POST /start-local-stream - Request received");
+  const { sdp, type } = req.body;
+
+  const pc = new RTCPeerConnection({
+    iceServers: [
+      {
+        urls: "stun:stun.l.google.com:19302",
+      },
+    ],
+  });
+
+  try {
+    // Create data channel for local communication
+    const dc = pc.createDataChannel("local-communication", {
+      ordered: true,
+    });
+
+    // Set up data channel event handlers
+    dc.onopen = () => {
+      console.log("POST /start-local-stream - Data channel opened");
+    };
+
+    dc.onmessage = (event) => {
+      console.log("POST /start-local-stream - Received message:", event.data);
+      // Handle incoming messages from client
+      try {
+        const data = JSON.parse(event.data);
+        console.log("POST /start-local-stream - Parsed message:", data);
+      } catch (error) {
+        console.error("POST /start-local-stream - Error parsing message:", error);
+      }
+    };
+
+    // Set up connection state handlers
+    pc.onconnectionstatechange = () => {
+      console.log("POST /start-local-stream - Connection state:", pc.connectionState);
+      if (pc.connectionState === 'connected') {
+        console.log("POST /start-local-stream - Connection established");
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log("POST /start-local-stream - ICE connection state:", pc.iceConnectionState);
+      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+        console.log("POST /start-local-stream - Connection closed");
+        pc.close();
+      }
+    };
+
+    // Handle ICE candidates
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        console.log("POST /start-local-stream - New ICE candidate");
+      }
+    };
+
+    // Set remote description from client's offer
+    await pc.setRemoteDescription(new RTCSessionDescription({ type, sdp }));
+    console.log("POST /start-local-stream - Set remote description");
+
+    // Create and send answer
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    console.log("POST /start-local-stream - Created and set local answer");
+
+    // Wait for ICE gathering to complete
+    await new Promise((resolve) => {
+      if (pc.iceGatheringState === "complete") {
+        resolve();
+      } else {
+        const checkState = () => {
+          if (pc.iceGatheringState === "complete") {
+            pc.removeEventListener("icegatheringstatechange", checkState);
+            resolve();
+          }
+        };
+        pc.addEventListener("icegatheringstatechange", checkState);
+      }
+    });
+    console.log("POST /start-local-stream - ICE gathering completed");
+
+    // Store the connection
+    const connectionId = crypto.randomUUID();
+    activeConnections.set(connectionId, {
+      pc,
+      dc
+    });
+    console.log("POST /start-local-stream - Stored connection with ID:", connectionId);
+
+    res.json({
+      answer: pc.localDescription,
+      // connectionId
+    });
+    console.log("response:", res);
+
+  } catch (error) {
+    console.error("POST /start-local-stream - Error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.listen(port, "0.0.0.0", () => {
   console.log(`Server is running at http://0.0.0.0:${port}`);
 });
