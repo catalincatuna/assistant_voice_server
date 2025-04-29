@@ -4,6 +4,9 @@
   "main": "app.js",
   "type": "module",
   "scripts": {
+    "build": "tsc",
+    "start": "node app.js",
+    "dev": "nodemon --watch 'src/**/*' --watch '.env' --ext 'ts,js,xml,env' --exec 'ts-node' app.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -18,7 +21,7 @@
     "node-pre-gyp": "^0.17.0",
     "node-wav": "^0.0.2",
     "openai": "^4.28.0",
-    "speaker": "^0.5.5",
+    "httpdispatcher": "^2.2.0",
     "web-audio-api": "^0.2.2",
     "wrtc": "^0.4.7",
     "ws": "^8.18.0"
@@ -26,6 +29,8 @@
   "devDependencies": {
     "@swc/cli": "^0.7.3",
     "@swc/core": "^1.11.21",
-    "@types/express": "^5.0.1"
+    "@types/express": "^5.0.1",
+    "@types/dotenv": "^8.2.0",
+    "nodemon": "^2.0.22"
   }
 }

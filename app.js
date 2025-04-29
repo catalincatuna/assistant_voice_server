@@ -26,6 +26,8 @@ import {
   sendReservationData,
 } from "./serverRealtime.js";
 
+import { handleCallConnection } from "./sessionManager.js";
+
 dotenv.config();
 
 const app = express();
@@ -42,6 +44,11 @@ const wss = new WebSocketServer({ server });
 app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
 const port = 3000;
+
+const PUBLIC_URL = "'//localhost:3000'";
+
+const twimlPath = join(__dirname, "twiml.xml");
+const twimlTemplate = readFileSync(twimlPath, "utf-8");
 
 // Global variables to store property details
 let propertyDetails = {
@@ -90,6 +97,15 @@ Trebuie sa discuti despre proprietate si nu despre altceva. Daca clientul are o 
 
 // Session management
 const sessions = new Map();
+
+app.all("/twiml", (req, res) => {
+  const wsUrl = new URL(PUBLIC_URL);
+  wsUrl.protocol = "wss:";
+  wsUrl.pathname = `/call`;
+
+  const twimlContent = twimlTemplate.replace("{{WS_URL}}", wsUrl.toString());
+  res.type("text/xml").send(twimlContent);
+});
 
 // POST endpoint to update property details
 app.post("/property", (req, res) => {
@@ -489,55 +505,45 @@ app.post("/start-local-stream", async (req, res) => {
   }
 });
 
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
   console.log("Client connected in ws");
 
-  const textMessage = {
-    type: "text",
-    data: "hello",
-  };
+  const url = new URL(req.url || "", `http://${req.headers.host}`);
+  const parts = url.pathname.split("/").filter(Boolean);
 
-  ws.send(JSON.stringify(textMessage));
-
-  // Send welcome audio when connection is established
-  const audioPath = path.join("C:", "Windows", "Media", "Alarm01.wav");
-  if (fs.existsSync(audioPath)) {
-    try {
-      const audioData = fs.readFileSync(audioPath);
-      const base64Audio = audioData.toString("base64");
-
-      const audioMessage = {
-        type: "audio",
-        data: base64Audio,
-        timestamp: new Date().toISOString(),
-      };
-
-      ws.send(JSON.stringify(audioMessage));
-      console.log("Welcome audio sent");
-    } catch (error) {
-      console.error("Error sending welcome audio:", error);
-    }
-  } else {
-    console.error("Welcome audio file not found at:", audioPath);
+  if (parts.length < 1) {
+    ws.close();
+    return;
   }
 
-  ws.on("message", async (data) => {
-    try {
-      const message = JSON.parse(data);
+  const type = parts[0];
 
-      if (message.type === "audio") {
-        console.log("Received audio message:", message);
-      } else {
-        console.log("Received non-audio message:", message);
-      }
-    } catch (error) {
-      console.error("Error processing message:", error);
-    }
-  });
+  if (type === "call") {
+    // // Send welcome audio when connection is established
+    // const audioPath = path.join("C:", "Windows", "Media", "Alarm01.wav");
+    // if (fs.existsSync(audioPath)) {
+    //   try {
+    //     const audioData = fs.readFileSync(audioPath);
+    //     const base64Audio = audioData.toString("base64");
 
-  ws.on("close", () => {
-    console.log("Client disconnected");
-  });
+    //     const audioMessage = {
+    //       type: "audio",
+    //       data: base64Audio,
+    //       timestamp: new Date().toISOString(),
+    //     };
+
+    //     ws.send(JSON.stringify(audioMessage));
+    //     console.log("Welcome audio sent");
+    //   } catch (error) {
+    //     console.error("Error sending welcome audio:", error);
+    //   }
+    // } else {
+    //   console.error("Welcome audio file not found at:", audioPath);
+    // }
+    if (currentCall) currentCall.close();
+    currentCall = ws;
+    handleCallConnection(currentCall, OPENAI_API_KEY);
+  }
 });
 
 server.listen(port, "0.0.0.0", () => {
