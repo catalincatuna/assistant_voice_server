@@ -3,12 +3,16 @@ import cors from "cors";
 import dotenv from 'dotenv';
 import OpenAI from "openai";
 import fs from "fs";
-import { WebSocket } from "ws";
 import wrtc from "wrtc";
 import crypto from "crypto";
 import Speaker from "speaker";
 import wav from "node-wav";
 import path from "path";
+import http from "http";
+import { WebSocketServer, WebSocket } from "ws";
+import { Transform } from "stream";
+import { OpusDecoder } from "opus-decoder";
+
 const { RTCPeerConnection, RTCSessionDescription, MediaStream } = wrtc;
 
 // Import realtime server functions
@@ -32,8 +36,10 @@ const openai = new OpenAI({
 });
 
 app.use(cors({ origin: "*" }));
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ limit: "50mb", extended: true }));
+app.use(express.json({ limit: "100mb" }));
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
+app.use(express.urlencoded({ limit: "100mb", extended: true }));
 
 const port = 3000;
 
@@ -483,6 +489,58 @@ app.post("/start-local-stream", async (req, res) => {
   }
 });
 
-app.listen(port, "0.0.0.0", () => {
+wss.on("connection", (ws) => {
+  console.log("Client connected in ws");
+
+  const textMessage = {
+    type: "text",
+    data: "hello",
+  };
+
+  ws.send(JSON.stringify(textMessage));
+
+  // Send welcome audio when connection is established
+  const audioPath = path.join("C:", "Windows", "Media", "Alarm01.wav");
+  if (fs.existsSync(audioPath)) {
+    try {
+      const audioData = fs.readFileSync(audioPath);
+      const base64Audio = audioData.toString("base64");
+
+      const audioMessage = {
+        type: "audio",
+        data: base64Audio,
+        timestamp: new Date().toISOString(),
+      };
+
+      ws.send(JSON.stringify(audioMessage));
+      console.log("Welcome audio sent");
+    } catch (error) {
+      console.error("Error sending welcome audio:", error);
+    }
+  } else {
+    console.error("Welcome audio file not found at:", audioPath);
+  }
+
+  ws.on("message", async (data) => {
+    try {
+      const message = JSON.parse(data);
+
+      if (message.type === "audio") {
+        console.log("Received audio message:", message);
+      } else {
+        console.log("Received non-audio message:", message);
+      }
+    } catch (error) {
+      console.error("Error processing message:", error);
+    }
+  });
+
+  ws.on("close", () => {
+    console.log("Client disconnected");
+  });
+});
+
+server.listen(port, "0.0.0.0", () => {
   console.log(`Server is running at http://0.0.0.0:${port}`);
+  console.log(`WebSocket server is running at ws://0.0.0.0:${port}`);
 });
