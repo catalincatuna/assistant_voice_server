@@ -11,9 +11,14 @@ import path from "path";
 import http from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { Transform } from "stream";
-import { OpusDecoder } from "opus-decoder";
+import { fileURLToPath } from "url";
 
+const { join } = path;
 const { RTCPeerConnection, RTCSessionDescription, MediaStream } = wrtc;
+const { readFileSync } = fs;
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Import realtime server functions
 import {
@@ -60,6 +65,8 @@ let propertyDetails = {
 // Store active RTC connections
 const activeConnections = new Map();
 
+export let wsSession = {};
+
 const SYSTEM_PROMPT1 = `
 Esti un asistent cu accent roman care deschide conversatia si intreaba 'cu ce va pot ajuta', 
 si ulterior raspunde scurt la intrebari legate de proprietatea urmatoare: 
@@ -99,12 +106,32 @@ Trebuie sa discuti despre proprietate si nu despre altceva. Daca clientul are o 
 const sessions = new Map();
 
 app.all("/twiml", (req, res) => {
-  const wsUrl = new URL(PUBLIC_URL);
-  wsUrl.protocol = "wss:";
-  wsUrl.pathname = `/call`;
+  console.log("TwiML endpoint hit - Request details:", {
+    method: req.method,
+    headers: req.headers,
+    query: req.query,
+    body: req.body,
+  });
 
-  const twimlContent = twimlTemplate.replace("{{WS_URL}}", wsUrl.toString());
-  res.type("text/xml").send(twimlContent);
+  try {
+    // Get the ngrok URL from the request host header
+    const ngrokUrl = req.headers.host;
+    console.log("Using ngrok URL:", ngrokUrl);
+
+    const twimlContent = twimlTemplate.replace(
+      "{{WS_URL}}",
+      `wss://${ngrokUrl}/call`
+    );
+    console.log("Generated TwiML content:", twimlContent);
+
+    res.type("text/xml").send(twimlContent);
+  } catch (error) {
+    console.error("Error in TwiML endpoint:", {
+      error: error.message,
+      stack: error.stack,
+    });
+    res.status(500).send("Error generating TwiML");
+  }
 });
 
 // POST endpoint to update property details
@@ -124,10 +151,17 @@ app.post("/property", (req, res) => {
   };
 
   // Update session with new property details
-  sessions.set(sessionId, {
-    propertyDetails,
-    systemPrompt: updateSystemPrompt(Name, Location, Description),
-  });
+  // sessions.set(sessionId, {
+  //   propertyDetails,
+  //   systemPrompt: updateSystemPrompt(Name, Location, Description),
+  // });
+  // wsSession.set("propertyDetails", propertyDetails);
+  // wsSession.set(
+  //   "systemPrompt",
+  //   updateSystemPrompt(Name, Location, Description)
+  // );
+  wsSession.propertyDetails = propertyDetails;
+  wsSession.systemPrompt = updateSystemPrompt(Name, Location, Description);
 
   console.log(
     "POST /property - Successfully updated property details for session:",
@@ -540,9 +574,8 @@ wss.on("connection", (ws, req) => {
     // } else {
     //   console.error("Welcome audio file not found at:", audioPath);
     // }
-    if (currentCall) currentCall.close();
-    currentCall = ws;
-    handleCallConnection(currentCall, OPENAI_API_KEY);
+
+    handleCallConnection(ws, key);
   }
 });
 
